@@ -1,0 +1,91 @@
+{
+  "schema_version": "1.0",
+  "id": "e2f1a9b4-7d5a-4b92-8c73-4f9e3a7b1c6d",
+  "type": "mcp_server",
+  "name": "오라클 테이블 데이터 동기화",
+  "version": "1.0.0",
+  "owner": {
+    "org": "<조직>",
+    "team": "<팀>",
+    "creator_id": "<이메일>"
+  },
+  "classification": "PUBLIC_INTERNAL",
+  "description": "소스 오라클 DB의 테이블 구조를 분석하고 특정 데이터를 추출해 타겟 오라클 DB에 동기화합니다. 단계별 실행 기록을 반환합니다.",
+  "tags": ["oracle", "sync", "database"],
+  "server_alias": "oracle-db-sync",
+  "provenance": "INTERNAL",
+  "protocol_version": "2025-06-18",
+  "transport": {
+    "kind": "STDIO",
+    "interpreter": "python",
+    "entrypoint": "server.py",
+    "args": [],
+    "vendored_dependencies": true
+  },
+  "declared_tools": [
+    {
+      "tool_name": "db.sync_table",
+      "label": "DB 간 테이블 동기화",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source_user": {
+            "type": "string",
+            "description": "소스 DB 유저"
+          },
+          "source_password": {
+            "type": "string",
+            "description": "소스 DB 비밀번호"
+          },
+          "source_dsn": {
+            "type": "string",
+            "description": "소스 DB DSN (예: host:port/service)"
+          },
+          "target_user": {
+            "type": "string",
+            "description": "타겟 DB 유저"
+          },
+          "target_password": {
+            "type": "string",
+            "description": "타겟 DB 비밀번호"
+          },
+          "target_dsn": {
+            "type": "string",
+            "description": "타겟 DB DSN"
+          },
+          "table_name": {
+            "type": "string",
+            "description": "동기화할 테이블명"
+          },
+          "where_condition": {
+            "type": "string",
+            "description": "데이터 추출 WHERE 조건 (예: ID > 100)"
+          }
+        },
+        "required": [
+          "source_user",
+          "source_password",
+          "source_dsn",
+          "target_user",
+          "target_password",
+          "target_dsn",
+          "table_name",
+          "where_condition"
+        ]
+      },
+      "risk_level": "WRITE",
+      "permissions": {
+        "allowed_roles": ["USER", "CREATOR", "ADMIN"],
+        "allowed_orgs": ["<조직>"]
+      },
+      "data_classification": "PUBLIC_INTERNAL",
+      "confirmation_policy": "ALWAYS",
+      "execution_guards": {
+        "timeout_seconds": 60,
+        "max_bytes": 1048576,
+        "rate_limit_per_minute": 10
+      }
+    }
+  ]
+}
