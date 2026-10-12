@@ -11,14 +11,11 @@ def setup_check_mode_encoding():
         except (AttributeError, ValueError):
             pass
 
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
 import mcp.types as types
+from mcp.server.stdio import stdio_server
 
 logging.basicConfig(stream=sys.stderr, level=logging.INFO)
 logger = logging.getLogger("oracle-sync-server")
-
-app = Server("oracle-sync-server")
 
 SYNC_INPUT_SCHEMA = {
     "type": "object",
@@ -41,6 +38,7 @@ SYNC_INPUT_SCHEMA = {
     ]
 }
 
+# 구버전/신버전 스키마 속성명 호환성 처리
 try:
     SYNC_TOOL = types.Tool(
         name="db.sync_table",
@@ -140,18 +138,29 @@ def perform_sync(args: dict) -> str:
         log.append(f"[오류 발생] 프로세스 중단: {str(e)}")
         return "\n".join(log)
 
-@app.list_tools()
-async def handle_list_tools() -> list[types.Tool]:
-    return [SYNC_TOOL]
-
-@app.call_tool()
-async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-    if name != "db.sync_table":
-        raise ValueError(f"Unknown Tool: {name}")
-    result_log = await asyncio.to_thread(perform_sync, arguments)
-    return [types.TextContent(type="text", text=result_log)]
-
 async def run_server():
+    """서버 런타임 모드일 때만 서버 객체를 생성하도록 분리 (점검 모드 에러 원천 차단)"""
+    from mcp.server import Server
+    app = Server("oracle-sync-server")
+
+    # 여기서부터 서버 모드에서만 실행되므로 점검 모드(--check)에서는 에러가 발생하지 않습니다.
+    if hasattr(app, "list_tools"):
+        @app.list_tools()
+        async def handle_list_tools() -> list[types.Tool]:
+            return [SYNC_TOOL]
+
+        @app.call_tool()
+        async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+            if name != "db.sync_table":
+                raise ValueError(f"Unknown Tool: {name}")
+            result_log = await asyncio.to_thread(perform_sync, arguments)
+            return [types.TextContent(type="text", text=result_log)]
+    else:
+        # 매우 구버전인 경우의 폴백
+        async def on_list_tools(request) -> types.ListToolsResult:
+            return types.ListToolsResult(tools=[SYNC_TOOL])
+        app.request_handlers = {types.ListToolsRequest: on_list_tools}
+
     async with stdio_server() as (read_stream, write_stream):
         await app.run(read_stream, write_stream, app.create_initialization_options())
 
