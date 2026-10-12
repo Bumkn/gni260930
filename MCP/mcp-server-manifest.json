@@ -61,6 +61,10 @@
           "where_condition": {
             "type": "string",
             "description": "데이터 추출 WHERE 조건 (예: ID > 100)"
+          },
+          "oracle_client_dir": {
+            "type": "string",
+            "description": "오라클 11g 통신용 19c Instant Client 경로 (생략 가능)"
           }
         },
         "required": [
