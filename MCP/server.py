@@ -11,11 +11,14 @@ def setup_check_mode_encoding():
         except (AttributeError, ValueError):
             pass
 
-import mcp.types as types
+from mcp.server import Server
 from mcp.server.stdio import stdio_server
+import mcp.types as types
 
 logging.basicConfig(stream=sys.stderr, level=logging.INFO)
 logger = logging.getLogger("oracle-sync-server")
+
+app = Server("oracle-sync-server")
 
 SYNC_INPUT_SCHEMA = {
     "type": "object",
@@ -28,7 +31,8 @@ SYNC_INPUT_SCHEMA = {
         "target_password": {"type": "string", "description": "타겟 DB 비밀번호"},
         "target_dsn": {"type": "string", "description": "타겟 DB DSN"},
         "table_name": {"type": "string", "description": "동기화할 테이블명"},
-        "where_condition": {"type": "string", "description": "데이터 추출 WHERE 조건 (예: ID > 100)"}
+        "where_condition": {"type": "string", "description": "데이터 추출 WHERE 조건 (예: ID > 100)"},
+        "oracle_client_dir": {"type": "string", "description": "오라클 11g 통신용 19c Instant Client 경로 (생략 가능)"}
     },
     "required": [
         "source_user", "source_password", "source_dsn",
@@ -37,7 +41,6 @@ SYNC_INPUT_SCHEMA = {
     ]
 }
 
-# 구버전/신버전 스키마 속성명 호환성 처리
 try:
     SYNC_TOOL = types.Tool(
         name="db.sync_table",
@@ -54,6 +57,18 @@ except TypeError:
 def perform_sync(args: dict) -> str:
     import oracledb
     log = []
+    
+    # --- 입력받은 변수에서 클라이언트 경로를 꺼내서 세팅 ---
+    oracle_client_dir = args.get('oracle_client_dir')
+    try:
+        if oracle_client_dir:
+            oracledb.init_oracle_client(lib_dir=oracle_client_dir)
+        else:
+            oracledb.init_oracle_client()
+    except Exception:
+        pass 
+    # --------------------------------------------------
+
     table_name = args['table_name']
     log.append("1. 소스 DB 연결 시도...")
     try:
@@ -99,12 +114,22 @@ def perform_sync(args: dict) -> str:
                     log.append("5. 타겟 테이블이 이미 존재하여 생성을 건너뜁니다.")
 
                 if rows:
-                    log.append("6. 타겟 테이블에 추출 데이터 입력 중...")
+                    log.append("6. 타겟 테이블에 데이터 입력 중 (중복 데이터 무시 정책 적용)...")
                     binds = [f":{i+1}" for i in range(len(col_names))]
                     insert_sql = f"INSERT INTO {table_name} ({', '.join(col_names)}) VALUES ({', '.join(binds)})"
-                    tgt_cur.executemany(insert_sql, rows)
+                    
+                    success_count = 0
+                    duplicate_count = 0
+                    
+                    for row in rows:
+                        try:
+                            tgt_cur.execute(insert_sql, row)
+                            success_count += 1
+                        except oracledb.IntegrityError:
+                            duplicate_count += 1
+                    
                     tgt_conn.commit()
-                    log.append(f"  -> {len(rows)}건 데이터 입력 및 커밋 완료.")
+                    log.append(f"  -> {success_count}건 정상 입력 완료, {duplicate_count}건 중복 건너뜀.")
                 else:
                     log.append("6. 입력할 대상 데이터가 없습니다.")
 
@@ -115,29 +140,18 @@ def perform_sync(args: dict) -> str:
         log.append(f"[오류 발생] 프로세스 중단: {str(e)}")
         return "\n".join(log)
 
+@app.list_tools()
+async def handle_list_tools() -> list[types.Tool]:
+    return [SYNC_TOOL]
+
+@app.call_tool()
+async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+    if name != "db.sync_table":
+        raise ValueError(f"Unknown Tool: {name}")
+    result_log = await asyncio.to_thread(perform_sync, arguments)
+    return [types.TextContent(type="text", text=result_log)]
+
 async def run_server():
-    """서버 런타임 모드일 때만 서버 객체를 생성하도록 분리 (점검 모드 에러 원천 차단)"""
-    from mcp.server import Server
-    app = Server("oracle-sync-server")
-
-    # 여기서부터 서버 모드에서만 실행되므로 점검 모드(--check)에서는 에러가 발생하지 않습니다.
-    if hasattr(app, "list_tools"):
-        @app.list_tools()
-        async def handle_list_tools() -> list[types.Tool]:
-            return [SYNC_TOOL]
-
-        @app.call_tool()
-        async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-            if name != "db.sync_table":
-                raise ValueError(f"Unknown Tool: {name}")
-            result_log = await asyncio.to_thread(perform_sync, arguments)
-            return [types.TextContent(type="text", text=result_log)]
-    else:
-        # 매우 구버전인 경우의 폴백
-        async def on_list_tools(request) -> types.ListToolsResult:
-            return types.ListToolsResult(tools=[SYNC_TOOL])
-        app.request_handlers = {types.ListToolsRequest: on_list_tools}
-
     async with stdio_server() as (read_stream, write_stream):
         await app.run(read_stream, write_stream, app.create_initialization_options())
 
